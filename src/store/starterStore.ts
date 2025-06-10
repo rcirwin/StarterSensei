@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Starter, Feeding, PhotoAnalysis, ChatMessage, CameraAnalysisResult } from '../types';
 
 interface StarterStore {
@@ -31,6 +33,8 @@ interface StarterStore {
   
   // Utility actions
   clearAllData: () => void;
+  initializeWithSampleData: () => void;
+  fixDateObjects: () => void;
 }
 
 const generateId = () => Date.now().toString() + Math.random().toString(36).substr(2, 9);
@@ -134,22 +138,61 @@ const samplePhotoAnalyses: PhotoAnalysis[] = [
   },
 ];
 
-export const useStarterStore = create<StarterStore>((set, get) => ({
-  starters: sampleStarters, // Start with sample data
-  feedings: sampleFeedings,
-  photoAnalyses: samplePhotoAnalyses,
-  cameraAnalyses: [],
-  chatMessages: [],
+// Date serialization helpers
+const serializeDate = (obj: any): any => {
+  if (obj instanceof Date) {
+    return { __isDate: true, value: obj.toISOString() };
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(serializeDate);
+  }
+  if (obj && typeof obj === 'object') {
+    const serialized: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      serialized[key] = serializeDate(value);
+    }
+    return serialized;
+  }
+  return obj;
+};
+
+const deserializeDate = (obj: any): any => {
+  if (obj && typeof obj === 'object' && obj.__isDate) {
+    return new Date(obj.value);
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(deserializeDate);
+  }
+  if (obj && typeof obj === 'object') {
+    const deserialized: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      deserialized[key] = deserializeDate(value);
+    }
+    return deserialized;
+  }
+  return obj;
+};
+
+export const useStarterStore = create<StarterStore>()(
+  persist(
+    (set, get) => ({
+      starters: [],
+      feedings: [],
+      photoAnalyses: [],
+      cameraAnalyses: [],
+      chatMessages: [],
   
   addStarter: (starterData) => {
     const newStarter: Starter = {
       ...starterData,
       id: generateId(),
       createdAt: new Date(),
+      lastFedAt: starterData.lastFedAt || new Date(),
     };
     set((state) => ({
       starters: [...state.starters, newStarter]
     }));
+    console.log('Added starter:', newStarter.name, 'Total starters:', get().starters.length);
   },
   
   updateStarter: (id, updates) => {
@@ -180,13 +223,15 @@ export const useStarterStore = create<StarterStore>((set, get) => ({
     const newFeeding: Feeding = {
       ...feedingData,
       id: generateId(),
+      fedAt: new Date(feedingData.fedAt), // Ensure it's a proper Date object
     };
     set((state) => ({
       feedings: [...state.feedings, newFeeding]
     }));
     
     // Update starter's lastFedAt
-    get().updateStarter(feedingData.starterId, { lastFedAt: feedingData.fedAt });
+    get().updateStarter(feedingData.starterId, { lastFedAt: newFeeding.fedAt });
+    console.log('Added feeding for starter:', feedingData.starterId, 'Total feedings:', get().feedings.length);
   },
   
   getFeedingsForStarter: (starterId) => {
@@ -195,14 +240,20 @@ export const useStarterStore = create<StarterStore>((set, get) => ({
   },
   
   addPhotoAnalysis: (analysisData) => {
+    const analysisWithDate = {
+      ...analysisData,
+      timestamp: new Date(analysisData.timestamp), // Ensure it's a proper Date object
+    };
+    
     set((state) => ({
-      cameraAnalyses: [...state.cameraAnalyses, analysisData]
+      cameraAnalyses: [...state.cameraAnalyses, analysisWithDate]
     }));
     
     // Update starter's health status based on analysis
     const healthStatus = analysisData.healthScore >= 7 ? 'healthy' : 
                         analysisData.healthScore >= 4 ? 'attention' : 'unhealthy';
     get().updateStarter(analysisData.starterId, { healthStatus });
+    console.log('Added photo analysis for starter:', analysisData.starterId, 'Health score:', analysisData.healthScore, 'Total analyses:', get().cameraAnalyses.length);
   },
   
   getPhotoAnalysesForStarter: (starterId) => {
@@ -243,4 +294,55 @@ export const useStarterStore = create<StarterStore>((set, get) => ({
       chatMessages: [],
     });
   },
-})); 
+
+  // Initialize with sample data if store is empty
+  initializeWithSampleData: () => {
+    const currentState = get();
+    if (currentState.starters.length === 0) {
+      set({
+        starters: sampleStarters,
+        feedings: sampleFeedings,
+        photoAnalyses: samplePhotoAnalyses,
+      });
+    }
+  },
+
+  // Fix any Date objects that might be strings after loading from storage
+  fixDateObjects: () => {
+    const state = get();
+    
+    const fixedStarters = state.starters.map(starter => ({
+      ...starter,
+      createdAt: typeof starter.createdAt === 'string' ? new Date(starter.createdAt) : starter.createdAt,
+      lastFedAt: starter.lastFedAt && typeof starter.lastFedAt === 'string' ? new Date(starter.lastFedAt) : starter.lastFedAt,
+    }));
+    
+    const fixedFeedings = state.feedings.map(feeding => ({
+      ...feeding,
+      fedAt: typeof feeding.fedAt === 'string' ? new Date(feeding.fedAt) : feeding.fedAt,
+    }));
+    
+    const fixedPhotoAnalyses = state.photoAnalyses.map(analysis => ({
+      ...analysis,
+      takenAt: typeof analysis.takenAt === 'string' ? new Date(analysis.takenAt) : analysis.takenAt,
+    }));
+    
+    const fixedCameraAnalyses = state.cameraAnalyses.map(analysis => ({
+      ...analysis,
+      timestamp: typeof analysis.timestamp === 'string' ? new Date(analysis.timestamp) : analysis.timestamp,
+    }));
+    
+    set({
+      starters: fixedStarters,
+      feedings: fixedFeedings,
+      photoAnalyses: fixedPhotoAnalyses,
+      cameraAnalyses: fixedCameraAnalyses,
+    });
+  },
+}),
+{
+  name: 'starter-storage',
+  storage: createJSONStorage(() => AsyncStorage),
+}
+)
+);

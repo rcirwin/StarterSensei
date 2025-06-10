@@ -26,6 +26,7 @@ import { useStarterStore } from '../store/starterStore';
 import { colors } from '../theme/colors';
 import type { StackScreenProps } from '@react-navigation/stack';
 import type { RootStackParamList, PhotoAnalysis, CameraAnalysisResult } from '../types';
+import { convertAIAnalysisToUI } from '../utils/starterAnalysisUtils';
 
 const { width } = Dimensions.get('window');
 
@@ -99,7 +100,7 @@ const MetricCard: React.FC<MetricCardProps> = ({
 };
 
 export const AnalysisResultsScreen: React.FC<Props> = ({ navigation, route }) => {
-  const { starterId, analysisId } = route.params;
+  const { starterId, analysisId, analysisResult } = route.params;
   const theme = useTheme();
   
   const { 
@@ -111,21 +112,21 @@ export const AnalysisResultsScreen: React.FC<Props> = ({ navigation, route }) =>
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
   const [confidenceProgress] = useState(new Animated.Value(0));
 
-  const starter = getStarter(starterId);
-  const photoAnalysis = getPhotoAnalysis(analysisId);
-  const cameraAnalyses = getCameraAnalysesForStarter(starterId);
-  
-  // Use camera analysis if photo analysis not found
-  const analysis = photoAnalysis || cameraAnalyses.find(a => a.id === analysisId);
+  // Handle both parameter types
+  let analysis: PhotoAnalysis | CameraAnalysisResult | undefined;
+  let starter: any;
 
-  useEffect(() => {
-    // Animate confidence bar on mount
-    Animated.timing(confidenceProgress, {
-      toValue: analysis ? (photoAnalysis ? photoAnalysis.jsonResult.confidence : 0.94) : 0,
-      duration: 1500,
-      useNativeDriver: false,
-    }).start();
-  }, [analysis, photoAnalysis, confidenceProgress]);
+  if (analysisResult) {
+    // Direct analysis result passed
+    analysis = analysisResult;
+    starter = getStarter(analysisResult.starterId);
+  } else if (starterId && analysisId) {
+    // Legacy parameters passed
+    starter = getStarter(starterId);
+    const photoAnalysis = getPhotoAnalysis(analysisId);
+    const cameraAnalyses = getCameraAnalysesForStarter(starterId);
+    analysis = photoAnalysis || cameraAnalyses.find(a => a.id === analysisId);
+  }
 
   if (!starter || !analysis) {
     return (
@@ -150,7 +151,9 @@ export const AnalysisResultsScreen: React.FC<Props> = ({ navigation, route }) =>
 
   const handleShare = async () => {
     try {
-      const healthScore = photoAnalysis ? photoAnalysis.jsonResult.rating : (analysis as CameraAnalysisResult).healthScore;
+      const healthScore = isPhotoAnalysis 
+        ? (analysis as PhotoAnalysis).jsonResult.rating 
+        : (analysis as CameraAnalysisResult).healthScore;
       const result = await Share.share({
         message: `My sourdough starter analysis shows excellent health with a score of ${healthScore}/10! 🥖✨`,
         title: 'Starter Analysis Results',
@@ -161,33 +164,68 @@ export const AnalysisResultsScreen: React.FC<Props> = ({ navigation, route }) =>
   };
 
   const handleChatWithAssistant = () => {
-    navigation.navigate('Chat', { starterId, analysisId });
+    const actualStarterId = analysisResult ? analysisResult.starterId : starterId!;
+    const actualAnalysisId = analysisResult ? analysisResult.id : analysisId!;
+    navigation.navigate('Chat', { starterId: actualStarterId, analysisId: actualAnalysisId });
   };
 
   const handleRetakePhoto = () => {
-    navigation.navigate('CameraCapture', { starterId });
+    const actualStarterId = analysisResult ? analysisResult.starterId : starterId!;
+    navigation.navigate('CameraCapture', { starterId: actualStarterId });
   };
 
   // Prepare data for display
-  const isPhotoAnalysis = 'jsonResult' in analysis;
-  const healthStatus = isPhotoAnalysis 
-    ? (analysis as PhotoAnalysis).jsonResult.healthStatus 
-    : ((analysis as CameraAnalysisResult).healthScore >= 7 ? 'healthy' : 
-       (analysis as CameraAnalysisResult).healthScore >= 4 ? 'attention' : 'unhealthy');
-  
-  const rating = isPhotoAnalysis 
-    ? (analysis as PhotoAnalysis).jsonResult.rating 
-    : (analysis as CameraAnalysisResult).healthScore;
-  
-  const confidence = isPhotoAnalysis 
-    ? (analysis as PhotoAnalysis).jsonResult.confidence 
-    : 0.94;
-
-  const imageUri = isPhotoAnalysis 
+  const isPhotoAnalysis = analysis && 'jsonResult' in analysis;
+  const imageUri = analysis ? (isPhotoAnalysis 
     ? (analysis as PhotoAnalysis).imageUri 
-    : (analysis as CameraAnalysisResult).photoUri;
+    : (analysis as CameraAnalysisResult).photoUri) : '';
+  
+  // Convert AI analysis to UI-friendly format
+  const uiData = analysis && !isPhotoAnalysis && (analysis as CameraAnalysisResult).aiAnalysis 
+    ? convertAIAnalysisToUI((analysis as CameraAnalysisResult).aiAnalysis!)
+    : null;
+  
+  // Use AI data if available, otherwise fallback to existing logic
+  const healthStatus = uiData?.healthStatus.text || 
+    (analysis && isPhotoAnalysis 
+      ? (analysis as PhotoAnalysis).jsonResult.healthStatus 
+      : (analysis && (analysis as CameraAnalysisResult).healthScore >= 7 ? 'healthy' : 
+         analysis && (analysis as CameraAnalysisResult).healthScore >= 4 ? 'attention' : 'unhealthy'));
+  
+  const rating = uiData?.rating || 
+    (analysis && isPhotoAnalysis 
+      ? (analysis as PhotoAnalysis).jsonResult.rating 
+      : (analysis ? (analysis as CameraAnalysisResult).healthScore : 0));
+  
+  const confidence = uiData?.confidence || 
+    (analysis && isPhotoAnalysis 
+      ? (analysis as PhotoAnalysis).jsonResult.confidence 
+      : 0.94);
+
+  useEffect(() => {
+    // Animate confidence bar on mount
+    if (analysis) {
+      const targetConfidence = confidence / 100; // Convert percentage to decimal
+      Animated.timing(confidenceProgress, {
+        toValue: targetConfidence,
+        duration: 1500,
+        useNativeDriver: false,
+      }).start();
+    }
+  }, [analysis, confidence, confidenceProgress]);
 
   const getHealthInfo = () => {
+    // Use AI-derived health info if available
+    if (uiData?.healthStatus) {
+      return {
+        title: uiData.healthStatus.text,
+        chipText: uiData.healthStatus.chip,
+        chipColor: uiData.healthStatus.chipColor,
+        description: getHealthDescription(uiData.rating),
+      };
+    }
+    
+    // Fallback to existing logic
     switch (healthStatus) {
       case 'healthy':
         return {
@@ -211,6 +249,13 @@ export const AnalysisResultsScreen: React.FC<Props> = ({ navigation, route }) =>
           description: 'Your starter needs immediate attention to restore health.',
         };
     }
+  };
+  
+  const getHealthDescription = (rating: number) => {
+    if (rating >= 4) return 'Your starter is thriving and ready for baking!';
+    if (rating >= 3) return 'Your starter is in good condition with healthy activity.';
+    if (rating >= 2) return 'Your starter shows signs of activity but could use some care.';
+    return 'Your starter needs immediate attention to restore health.';
   };
 
   const healthInfo = getHealthInfo();
@@ -267,67 +312,71 @@ export const AnalysisResultsScreen: React.FC<Props> = ({ navigation, route }) =>
           {/* Rise Height Card */}
           <MetricCard
             icon="trending-up"
-            iconColor={colors.success}
+            iconColor={(uiData?.riseScore || 7) >= 7 ? colors.success : (uiData?.riseScore || 7) >= 4 ? colors.warning : colors.error}
             title="Rise Height"
-            subtitle="125% increase"
-            score="8.5"
-            scoreColor={colors.success}
+            subtitle={(uiData?.riseDescription?.substring(0, 50) + '...') || "Rise activity analysis"}
+            score={(uiData?.riseScore || 7).toString()}
+            scoreColor={(uiData?.riseScore || 7) >= 7 ? colors.success : (uiData?.riseScore || 7) >= 4 ? colors.warning : colors.error}
             expanded={expandedCards.rise}
             onToggle={() => toggleCard('rise')}
           >
             <View style={styles.chartContainer}>
               <View style={styles.miniChart}>
-                {[8, 12, 10, 14, 16].map((height, index) => (
+                {(uiData?.riseData || [8, 12, 10, 14, 16]).map((height, index) => (
                   <View
                     key={index}
                     style={[
                       styles.chartBar,
                       { 
                         height: height * 2,
-                        backgroundColor: colors.success,
+                        backgroundColor: (uiData?.riseScore || 7) >= 7 ? colors.success : (uiData?.riseScore || 7) >= 4 ? colors.warning : colors.error,
                       }
                     ]}
                   />
                 ))}
               </View>
-              <Text style={styles.chartLabel}>Consistent upward trend</Text>
+              <Text style={styles.chartLabel}>
+                {(uiData?.riseScore || 7) >= 7 ? 'Strong rise activity' : (uiData?.riseScore || 7) >= 4 ? 'Moderate rise' : 'Limited rise'}
+              </Text>
             </View>
             <Text style={styles.metricDescription}>
-              Excellent vertical expansion indicates strong yeast activity and proper fermentation.
+              {uiData?.riseDescription || "Excellent vertical expansion indicates strong yeast activity and proper fermentation."}
             </Text>
           </MetricCard>
 
           {/* Bubble Density Card */}
           <MetricCard
             icon="circle"
-            iconColor={colors.primary}
+            iconColor={(uiData?.bubbleScore || 7) >= 7 ? colors.primary : (uiData?.bubbleScore || 7) >= 4 ? colors.warning : colors.error}
             title="Bubble Density"
-            subtitle="High activity"
-            score="9.2"
-            scoreColor={colors.primary}
+            subtitle={(uiData?.bubbleDescription?.substring(0, 30) + '...') || "Bubble activity"}
+            score={(uiData?.bubbleScore || 7).toString()}
+            scoreColor={(uiData?.bubbleScore || 7) >= 7 ? colors.primary : (uiData?.bubbleScore || 7) >= 4 ? colors.warning : colors.error}
             expanded={expandedCards.bubble}
             onToggle={() => toggleCard('bubble')}
           >
             <View style={styles.bubbleContainer}>
               <View style={styles.bubbleGrid}>
-                {Array.from({ length: 8 }, (_, index) => (
+                {Array.from({ length: uiData?.bubblePattern?.count || 8 }, (_, index) => (
                   <View
                     key={index}
                     style={[
                       styles.bubble,
                       {
-                        width: 8 + Math.random() * 8,
-                        height: 8 + Math.random() * 8,
-                        backgroundColor: `${colors.primary}${Math.floor(30 + Math.random() * 50).toString(16)}`,
+                        width: uiData?.bubblePattern?.sizes?.[index] || (8 + Math.random() * 8),
+                        height: uiData?.bubblePattern?.sizes?.[index] || (8 + Math.random() * 8),
+                        backgroundColor: `${(uiData?.bubbleScore || 7) >= 7 ? colors.primary : (uiData?.bubbleScore || 7) >= 4 ? colors.warning : colors.error}${Math.floor(30 + Math.random() * 50).toString(16)}`,
                       }
                     ]}
                   />
                 ))}
               </View>
-              <Text style={styles.bubbleLabel}>Uniform bubble distribution</Text>
+              <Text style={styles.bubbleLabel}>
+                {uiData?.bubblePattern?.description || "Uniform bubble distribution"}
+              </Text>
             </View>
             <Text style={styles.metricDescription}>
-              Uniform bubble distribution throughout the starter indicates healthy fermentation process.
+              {uiData?.bubbleDescription || "Uniform bubble distribution throughout the starter indicates healthy fermentation process."}
             </Text>
           </MetricCard>
 
@@ -336,11 +385,11 @@ export const AnalysisResultsScreen: React.FC<Props> = ({ navigation, route }) =>
             icon="eye"
             iconColor={colors.tertiary}
             title="Surface & Color"
-            subtitle="Healthy appearance"
+            subtitle={uiData?.colorDescription?.substring(0, 30) + '...' || "Healthy appearance"}
             score={
               <View style={styles.colorSamples}>
-                <View style={[styles.colorSample, { backgroundColor: '#FFF8DC' }]} />
-                <View style={[styles.colorSample, { backgroundColor: '#FFEFD5' }]} />
+                <View style={[styles.colorSample, { backgroundColor: uiData?.colors?.[0] || '#FFF8DC' }]} />
+                <View style={[styles.colorSample, { backgroundColor: uiData?.colors?.[1] || '#FFEFD5' }]} />
               </View>
             }
             scoreColor={colors.tertiary}
@@ -349,47 +398,58 @@ export const AnalysisResultsScreen: React.FC<Props> = ({ navigation, route }) =>
           >
             <View style={styles.colorContainer}>
               <View style={styles.colorPalette}>
-                <View style={[styles.colorSwatch, { backgroundColor: '#FFF8DC' }]} />
-                <View style={[styles.colorSwatch, { backgroundColor: '#FFEFD5' }]} />
-                <View style={[styles.colorSwatch, { backgroundColor: '#FFE4B5' }]} />
+                <View style={[styles.colorSwatch, { backgroundColor: uiData?.colors?.[0] || '#FFF8DC' }]} />
+                <View style={[styles.colorSwatch, { backgroundColor: uiData?.colors?.[1] || '#FFEFD5' }]} />
+                <View style={[styles.colorSwatch, { backgroundColor: uiData?.colors?.[2] || '#FFE4B5' }]} />
               </View>
-              <Text style={styles.colorLabel}>Natural color variation</Text>
+              <Text style={styles.colorLabel}>
+                {uiData?.colors ? 'AI-detected colors' : 'Natural color variation'}
+              </Text>
             </View>
             <Text style={styles.metricDescription}>
-              Creamy white to light tan coloration is normal and healthy for wheat-based starters.
+              {uiData?.surfaceDescription || "Creamy white to light tan coloration is normal and healthy for wheat-based starters."}
             </Text>
           </MetricCard>
 
           {/* Activity Stage Card */}
           <MetricCard
             icon="clock"
-            iconColor={colors.warning}
+            iconColor={uiData?.activityStage?.color || colors.warning}
             title="Activity Stage"
-            subtitle="Peak fermentation"
+            subtitle={uiData?.activityStage?.description || "Peak fermentation"}
             score={
               <Chip
                 mode="flat"
-                style={[styles.stageChip, { backgroundColor: `${colors.warning}20` }]}
-                textStyle={[styles.chipText, { color: colors.warning }]}
+                style={[styles.stageChip, { backgroundColor: `${uiData?.activityStage?.color || colors.warning}20` }]}
+                textStyle={[styles.chipText, { color: uiData?.activityStage?.color || colors.warning }]}
               >
-                Peak
+                {uiData?.activityStage?.label || "Peak"}
               </Chip>
             }
-            scoreColor={colors.warning}
+            scoreColor={uiData?.activityStage?.color || colors.warning}
             expanded={expandedCards.stage}
             onToggle={() => toggleCard('stage')}
           >
             <View style={styles.stageContainer}>
               <View style={styles.stageTimeline}>
-                <View style={[styles.stageBar, { backgroundColor: colors.disabled }]} />
-                <View style={[styles.stageBar, { backgroundColor: colors.primary }]} />
-                <View style={[styles.stageBar, { backgroundColor: colors.warning }]} />
-                <View style={[styles.stageBar, { backgroundColor: colors.disabled }]} />
+                {[0, 1, 2, 3].map((stage) => (
+                  <View 
+                    key={stage}
+                    style={[
+                      styles.stageBar, 
+                      { 
+                        backgroundColor: stage <= (uiData?.activityStage?.position || 2) 
+                          ? (uiData?.activityStage?.color || colors.warning)
+                          : colors.disabled 
+                      }
+                    ]} 
+                  />
+                ))}
               </View>
               <Text style={styles.stageLabel}>Lag → Growth → Peak → Decline</Text>
             </View>
             <Text style={styles.metricDescription}>
-              Your starter is at peak activity - perfect timing for baking or maintaining feeding schedule.
+              {uiData?.activityStage?.description || "Your starter is at peak activity - perfect timing for baking or maintaining feeding schedule."}
             </Text>
           </MetricCard>
         </View>
@@ -397,17 +457,17 @@ export const AnalysisResultsScreen: React.FC<Props> = ({ navigation, route }) =>
         {/* Next Step Callout */}
         <View style={styles.calloutSection}>
           <LinearGradient
-            colors={[`${colors.primary}10`, `${colors.warning}10`]}
+            colors={[`${uiData?.activityStage?.color || colors.primary}10`, `${uiData?.activityStage?.color || colors.warning}10`]}
             style={styles.calloutCard}
           >
             <View style={styles.calloutHeader}>
-              <View style={[styles.iconContainer, { backgroundColor: `${colors.primary}20` }]}>
-                <Icon name="lightbulb" size={24} color={colors.primary} />
+              <View style={[styles.iconContainer, { backgroundColor: `${uiData?.activityStage?.color || colors.primary}20` }]}>
+                <Icon name="lightbulb" size={24} color={uiData?.activityStage?.color || colors.primary} />
               </View>
               <View style={styles.calloutInfo}>
                 <Text style={styles.calloutTitle}>Recommended Action</Text>
                 <Text style={styles.calloutDescription}>
-                  Feed 1:2:2 ratio and keep at 26°C for 4 hours, then use for baking or refrigerate.
+                  {uiData?.recommendation || "Feed 1:2:2 ratio and keep at 26°C for 4 hours, then use for baking or refrigerate."}
                 </Text>
               </View>
             </View>
@@ -442,19 +502,60 @@ export const AnalysisResultsScreen: React.FC<Props> = ({ navigation, route }) =>
                     {
                       width: confidenceProgress.interpolate({
                         inputRange: [0, 1],
-                        outputRange: ['0%', `${Math.round(confidence * 100)}%`],
+                        outputRange: ['0%', `${confidence}%`],
                       }),
                     },
                   ]}
                 />
               </View>
-              <Text style={styles.confidencePercent}>{Math.round(confidence * 100)}%</Text>
+              <Text style={styles.confidencePercent}>{confidence}%</Text>
             </View>
             <Text style={styles.confidenceNote}>
-              High confidence based on clear image quality and distinct features
+              {confidence >= 80 ? 'High confidence' : confidence >= 60 ? 'Good confidence' : 'Moderate confidence'} based on image quality and feature detection
             </Text>
           </Card>
         </View>
+
+        {/* AI Analysis Details */}
+        {!isPhotoAnalysis && (analysis as CameraAnalysisResult).aiAnalysis && (
+          <View style={styles.aiAnalysisSection}>
+            <Card style={styles.aiAnalysisCard}>
+              <View style={styles.aiAnalysisHeader}>
+                <View style={[styles.iconContainer, { backgroundColor: `${colors.primary}20` }]}>
+                  <Icon name="cpu" size={20} color={colors.primary} />
+                </View>
+                <Text style={styles.aiAnalysisTitle}>Starter-Sensei AI Analysis</Text>
+              </View>
+              <View style={styles.aiAnalysisContent}>
+                {Object.entries((analysis as CameraAnalysisResult).aiAnalysis!).map(([key, value]) => {
+                  if (key === 'rationale') return null; // We'll show this separately
+                  
+                  const formatKey = (k: string) => {
+                    return k.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+                  };
+                  
+                  return (
+                    <View key={key} style={styles.aiAnalysisItem}>
+                      <Text style={styles.aiAnalysisLabel}>{formatKey(key)}</Text>
+                      <Text style={styles.aiAnalysisValue}>{value}</Text>
+                    </View>
+                  );
+                })}
+                
+                {(analysis as CameraAnalysisResult).aiAnalysis!.rationale && (
+                  <View style={styles.aiRationaleContainer}>
+                    <Text style={styles.aiRationaleLabel}>AI Rationale</Text>
+                    <View style={styles.aiRationaleBox}>
+                      <Text style={styles.aiRationaleText}>
+                        {(analysis as CameraAnalysisResult).aiAnalysis!.rationale}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+              </View>
+            </Card>
+          </View>
+        )}
 
         {/* Action Buttons */}
         <View style={styles.buttonSection}>
@@ -840,5 +941,73 @@ const styles = StyleSheet.create({
   buttonLabel: {
     fontSize: 16,
     fontWeight: '500',
+  },
+  aiAnalysisSection: {
+    padding: 16,
+  },
+  aiAnalysisCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    elevation: 1,
+  },
+  aiAnalysisHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    paddingBottom: 12,
+  },
+  aiAnalysisTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.secondary,
+    marginLeft: 12,
+    fontFamily: 'Montserrat_600SemiBold',
+  },
+  aiAnalysisContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  aiAnalysisItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: `${colors.tertiary}10`,
+  },
+  aiAnalysisLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: colors.secondary,
+    flex: 1,
+    marginRight: 12,
+  },
+  aiAnalysisValue: {
+    fontSize: 14,
+    color: `${colors.secondary}CC`,
+    flex: 2,
+    textAlign: 'right',
+  },
+  aiRationaleContainer: {
+    marginTop: 16,
+  },
+  aiRationaleLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.secondary,
+    marginBottom: 8,
+  },
+  aiRationaleBox: {
+    backgroundColor: `${colors.primary}08`,
+    borderRadius: 8,
+    padding: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary,
+  },
+  aiRationaleText: {
+    fontSize: 14,
+    color: `${colors.secondary}DD`,
+    lineHeight: 20,
+    fontStyle: 'italic',
   },
 }); 

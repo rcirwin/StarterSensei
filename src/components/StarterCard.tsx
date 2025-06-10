@@ -11,12 +11,22 @@ interface StarterCardProps {
   onLongPress: () => void;
 }
 
-const formatTimeAgo = (date: Date): string => {
+const formatTimeAgo = (date: Date | string | undefined): string => {
+  if (!date) return 'Never fed';
+  
+  // Convert to Date object if it's a string
+  const dateObj = typeof date === 'string' ? new Date(date) : date;
+  
+  // Check if the date is valid
+  if (isNaN(dateObj.getTime())) {
+    return 'Never fed';
+  }
+  
   const now = new Date();
-  const diffInHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60));
+  const diffInHours = Math.floor((now.getTime() - dateObj.getTime()) / (1000 * 60 * 60));
   
   if (diffInHours < 1) {
-    const diffInMinutes = Math.floor((now.getTime() - date.getTime()) / (1000 * 60));
+    const diffInMinutes = Math.floor((now.getTime() - dateObj.getTime()) / (1000 * 60));
     return `Fed ${diffInMinutes} minutes ago`;
   } else if (diffInHours === 1) {
     return 'Fed 1 hour ago';

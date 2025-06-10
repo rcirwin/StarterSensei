@@ -21,6 +21,7 @@ import {
   Snackbar,
 } from 'react-native-paper';
 import { CameraView, CameraType, FlashMode, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RouteProp } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Feather';
@@ -28,6 +29,7 @@ import Slider from '@react-native-community/slider';
 import { useStarterStore } from '../store/starterStore';
 import { colors } from '../theme/colors';
 import { RootStackParamList } from '../types';
+import { aiService, AnalysisContext, StarterAnalysisResult } from '../services/aiService';
 
 type CameraCaptureScreenNavigationProp = StackNavigationProp<
   RootStackParamList,
@@ -200,38 +202,60 @@ export const CameraCaptureScreen: React.FC<Props> = ({ navigation, route }) => {
     }
   };
 
-  const completeAnalysis = (photoUri: string) => {
-    // Generate mock analysis results
-    const analysisResult = {
-      id: Date.now().toString(),
-      starterId,
-      photoUri,
-      timestamp: new Date(),
-      healthScore: 8.5,
-      riseActivity: 'Good vertical expansion detected',
-      bubbleFormation: 'Consistent bubble pattern throughout',
-      fermentationStage: 'Peak activity phase',
-      recommendations: [
-        'Use for bread within 2-4 hours',
-        'Feed if continuing maintenance',
-      ],
-      context: {
-        timeSinceFeed,
-        lastFeedRatio: `${starterWeight}:${flourWeight}:${waterWeight}`,
+  const completeAnalysis = async (photoUri: string) => {
+    try {
+      // Prepare context for AI analysis
+      const context: AnalysisContext = {
+        timeSinceFeed: TIME_OPTIONS.find(opt => opt.value === timeSinceFeed)?.label || timeSinceFeed,
+        lastFeedRatio: `${starterWeight}:${flourWeight}:${waterWeight}g`,
         flourType: selectedFlourTypes.join(' + '),
         roomTemp,
         goal,
-      },
-    };
+      };
 
-    addPhotoAnalysis(analysisResult);
-    setIsAnalyzing(false);
-    
-    // Navigate immediately to analysis results screen
-    navigation.navigate('PhotoAnalysisDetail', { 
-      starterId, 
-      analysisId: analysisResult.id 
-    });
+      // Call AI service for real analysis
+      const aiResult: StarterAnalysisResult = await aiService.analyzeStarterImage(photoUri, context);
+      
+      // Convert AI result to our analysis format
+      const healthScore = parseFloat(aiResult.health_rating || '3') * 2; // Convert 1-5 scale to 1-10
+      const confidenceScore = aiResult.confidence_pct ? 
+        parseInt(aiResult.confidence_pct.toString().replace('%', '')) / 100 : 0.75;
+      
+      const analysisResult = {
+        id: Date.now().toString(),
+        starterId,
+        photoUri,
+        timestamp: new Date(),
+        healthScore,
+        riseActivity: aiResult.rise_height || 'Rise analysis unavailable',
+        bubbleFormation: aiResult.bubble_density || 'Bubble analysis unavailable',
+        fermentationStage: aiResult.activity_stage || 'peak',
+        recommendations: [aiResult.recommended_next_step || 'Continue regular feeding schedule'],
+        context: {
+          timeSinceFeed: context.timeSinceFeed,
+          lastFeedRatio: context.lastFeedRatio,
+          flourType: context.flourType,
+          roomTemp: context.roomTemp,
+          goal: context.goal,
+        },
+        // Store full AI analysis for detailed view
+        aiAnalysis: aiResult,
+      };
+
+      addPhotoAnalysis(analysisResult);
+      setIsAnalyzing(false);
+      
+      // Navigate immediately to analysis results screen
+      navigation.navigate('PhotoAnalysisDetail', { 
+        starterId, 
+        analysisId: analysisResult.id 
+      });
+    } catch (error) {
+      console.error('Error in AI analysis:', error);
+      setIsAnalyzing(false);
+      setSnackbarMessage(error instanceof Error ? error.message : 'Analysis failed');
+      setSnackbarVisible(true);
+    }
   };
 
   const retakePhoto = () => {
@@ -255,6 +279,38 @@ export const CameraCaptureScreen: React.FC<Props> = ({ navigation, route }) => {
 
   const adjustTemperature = (delta: number) => {
     setRoomTemp(prev => Math.max(60, Math.min(85, prev + delta)));
+  };
+
+  const openImagePicker = async () => {
+    try {
+      // Request media library permissions
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      
+      if (status !== 'granted') {
+        setSnackbarMessage('Permission to access photos is required');
+        setSnackbarVisible(true);
+        return;
+      }
+
+      // Launch image picker
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: 'images',
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const selectedImage = result.assets[0];
+        setCapturedImage(selectedImage.uri);
+        setSnackbarMessage('Photo selected successfully');
+        setSnackbarVisible(true);
+      }
+    } catch (error) {
+      console.error('Error opening image picker:', error);
+      setSnackbarMessage('Failed to open photo gallery');
+      setSnackbarVisible(true);
+    }
   };
 
   if (!permission) {
@@ -370,8 +426,19 @@ export const CameraCaptureScreen: React.FC<Props> = ({ navigation, route }) => {
 
             {/* Camera Controls */}
             <View style={styles.cameraControls}>
-              <TouchableOpacity style={styles.controlButton}>
-                <Icon name="image" size={24} color="white" />
+              <TouchableOpacity 
+                style={[
+                  styles.controlButton,
+                  isAnalyzing && styles.controlButtonDisabled
+                ]}
+                onPress={openImagePicker}
+                disabled={isAnalyzing}
+              >
+                <Icon 
+                  name="image" 
+                  size={24} 
+                  color={isAnalyzing ? colors.disabled : "white"} 
+                />
               </TouchableOpacity>
               
               <TouchableOpacity 
@@ -825,6 +892,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  controlButtonDisabled: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    opacity: 0.5,
   },
   captureButton: {
     width: 80,

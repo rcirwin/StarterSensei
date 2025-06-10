@@ -17,7 +17,7 @@ import { LineChart } from 'react-native-chart-kit';
 import Icon from 'react-native-vector-icons/Feather';
 import { useStarterStore } from '../store/starterStore';
 import { colors } from '../theme/colors';
-import { Starter, Feeding, PhotoAnalysis } from '../types';
+import { Starter, Feeding, PhotoAnalysis, CameraAnalysisResult } from '../types';
 import { LogFeedingModal } from '../components/LogFeedingModal';
 
 interface StarterDetailScreenProps {
@@ -27,16 +27,16 @@ interface StarterDetailScreenProps {
 
 interface TimelineItem {
   id: string;
-  type: 'feeding' | 'photo';
+  type: 'feeding' | 'photo' | 'camera-analysis';
   timestamp: Date;
-  data: Feeding | PhotoAnalysis;
+  data: Feeding | PhotoAnalysis | CameraAnalysisResult;
 }
 
 const { width: screenWidth } = Dimensions.get('window');
 
 export const StarterDetailScreen: React.FC<StarterDetailScreenProps> = ({ navigation, route }) => {
   const { starterId } = route.params;
-  const { getStarterById, getFeedingsForStarter, getPhotoAnalysesForStarter } = useStarterStore();
+  const { getStarterById, getFeedingsForStarter, getPhotoAnalysesForStarter, getCameraAnalysesForStarter } = useStarterStore();
   
   const [starter, setStarter] = useState<Starter | null>(null);
   const [timelineItems, setTimelineItems] = useState<TimelineItem[]>([]);
@@ -47,9 +47,10 @@ export const StarterDetailScreen: React.FC<StarterDetailScreenProps> = ({ naviga
     if (starterData) {
       setStarter(starterData);
       
-      // Combine feedings and photo analyses for timeline
+      // Combine feedings, photo analyses, and camera analyses for timeline
       const feedings = getFeedingsForStarter(starterId);
       const photoAnalyses = getPhotoAnalysesForStarter(starterId);
+      const cameraAnalyses = getCameraAnalysesForStarter(starterId);
       
       const feedingItems: TimelineItem[] = feedings.map(feeding => ({
         id: feeding.id,
@@ -65,18 +66,26 @@ export const StarterDetailScreen: React.FC<StarterDetailScreenProps> = ({ naviga
         data: analysis,
       }));
       
+      const cameraItems: TimelineItem[] = cameraAnalyses.map(analysis => ({
+        id: analysis.id,
+        type: 'camera-analysis',
+        timestamp: analysis.timestamp,
+        data: analysis,
+      }));
+      
       // Combine and sort by timestamp (newest first)
-      const allItems = [...feedingItems, ...photoItems].sort(
+      const allItems = [...feedingItems, ...photoItems, ...cameraItems].sort(
         (a, b) => b.timestamp.getTime() - a.timestamp.getTime()
       );
       
       setTimelineItems(allItems);
+      console.log('Timeline refreshed - Total items:', allItems.length, 'Camera analyses:', cameraItems.length);
     }
   };
 
   useEffect(() => {
     refreshTimeline();
-  }, [starterId, getStarterById, getFeedingsForStarter, getPhotoAnalysesForStarter]);
+  }, [starterId, getStarterById, getFeedingsForStarter, getPhotoAnalysesForStarter, getCameraAnalysesForStarter]);
 
   // Refresh timeline when modal closes (in case new feeding was added)
   useEffect(() => {
@@ -107,9 +116,19 @@ export const StarterDetailScreen: React.FC<StarterDetailScreenProps> = ({ naviga
     }
   };
 
-  const formatTimeAgo = (date: Date): string => {
+  const formatTimeAgo = (date: Date | string | undefined): string => {
+    if (!date) return 'Unknown time';
+    
+    // Convert to Date object if it's a string
+    const dateObj = typeof date === 'string' ? new Date(date) : date;
+    
+    // Check if the date is valid
+    if (isNaN(dateObj.getTime())) {
+      return 'Unknown time';
+    }
+    
     const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
+    const diffMs = now.getTime() - dateObj.getTime();
     const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
     const diffDays = Math.floor(diffHours / 24);
     
@@ -134,7 +153,7 @@ export const StarterDetailScreen: React.FC<StarterDetailScreenProps> = ({ naviga
   };
 
   const healthChipStyle = getHealthChipStyle(starter.healthStatus);
-  const latestPhotoAnalysis = timelineItems.find(item => item.type === 'photo')?.data as PhotoAnalysis;
+  const latestPhotoAnalysis = timelineItems.find(item => item.type === 'photo' || item.type === 'camera-analysis')?.data as PhotoAnalysis | CameraAnalysisResult;
 
   const handleEditStarter = () => {
     navigation.navigate('EditStarter', { starterId });
@@ -157,6 +176,8 @@ export const StarterDetailScreen: React.FC<StarterDetailScreenProps> = ({ naviga
   const handleTimelineItemPress = (item: TimelineItem) => {
     if (item.type === 'photo') {
       navigation.navigate('PhotoAnalysisDetail', { analysisId: item.id });
+    } else if (item.type === 'camera-analysis') {
+      navigation.navigate('PhotoAnalysisDetail', { analysisResult: item.data });
     }
   };
 
@@ -203,7 +224,7 @@ export const StarterDetailScreen: React.FC<StarterDetailScreenProps> = ({ naviga
           </View>
         </View>
       );
-    } else {
+    } else if (item.type === 'photo') {
       const analysis = item.data as PhotoAnalysis;
       return (
         <TouchableOpacity
@@ -236,6 +257,48 @@ export const StarterDetailScreen: React.FC<StarterDetailScreenProps> = ({ naviga
                         { color: analysis.jsonResult.rating >= 4 ? '#00695C' : '#E65100' }
                       ]}>
                         Score: {analysis.jsonResult.rating}/5
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+            </Card>
+          </View>
+        </TouchableOpacity>
+      );
+    } else if (item.type === 'camera-analysis') {
+      const analysis = item.data as CameraAnalysisResult;
+      return (
+        <TouchableOpacity
+          key={item.id}
+          style={styles.timelineItem}
+          onPress={() => handleTimelineItemPress(item)}
+        >
+          <View style={styles.timelineIconContainer}>
+            <View style={[styles.timelineIcon, styles.photoIcon]}>
+              <Icon name="camera" size={12} color={colors.onPrimary} />
+            </View>
+            {!isLast && <View style={styles.timelineLine} />}
+          </View>
+          <View style={styles.timelineContent}>
+            <Card style={styles.timelineCard}>
+              <View style={styles.cardContent}>
+                                 <View style={styles.analysisRow}>
+                   <Image source={{ uri: analysis.photoUri }} style={styles.analysisThumbnail} />
+                   <View style={styles.analysisDetails}>
+                     <View style={styles.cardHeader}>
+                       <Text style={styles.cardTitle}>AI Analysis</Text>
+                      <Text style={styles.cardTime}>{formatTimeAgo(analysis.timestamp)}</Text>
+                    </View>
+                    <Text style={styles.analysisNotes}>
+                      {analysis.recommendations || `Health: ${analysis.healthScore}/10`}
+                    </Text>
+                    <View style={styles.scoreContainer}>
+                      <Text style={[
+                        styles.scoreText,
+                        { color: analysis.healthScore >= 7 ? '#00695C' : '#E65100' }
+                      ]}>
+                        Score: {analysis.healthScore}/10
                       </Text>
                     </View>
                   </View>
@@ -309,24 +372,50 @@ export const StarterDetailScreen: React.FC<StarterDetailScreenProps> = ({ naviga
 
         {/* Last Analysis Card */}
         {latestPhotoAnalysis && (
-          <TouchableOpacity onPress={() => navigation.navigate('PhotoAnalysisDetail', { analysisId: latestPhotoAnalysis.id })}>
+          <TouchableOpacity onPress={() => {
+            const latestItem = timelineItems.find(item => item.type === 'photo' || item.type === 'camera-analysis');
+            if (latestItem?.type === 'photo') {
+              navigation.navigate('PhotoAnalysisDetail', { analysisId: latestItem.id });
+            } else if (latestItem?.type === 'camera-analysis') {
+              navigation.navigate('PhotoAnalysisDetail', { analysisResult: latestItem.data });
+            }
+          }}>
             <Card style={styles.analysisCard}>
               <View style={styles.analysisRow}>
-                <Image source={{ uri: latestPhotoAnalysis.imageUri }} style={styles.lastAnalysisThumbnail} />
+                {'imageUri' in latestPhotoAnalysis ? (
+                  <Image source={{ uri: latestPhotoAnalysis.imageUri }} style={styles.lastAnalysisThumbnail} />
+                ) : (
+                  <Image source={{ uri: (latestPhotoAnalysis as CameraAnalysisResult).photoUri }} style={styles.lastAnalysisThumbnail} />
+                )}
                 <View style={styles.lastAnalysisDetails}>
                   <View style={styles.cardHeader}>
                     <Text style={styles.cardTitle}>Last Analysis</Text>
-                    <Text style={styles.cardTime}>{formatTimeAgo(latestPhotoAnalysis.takenAt)}</Text>
+                    {'takenAt' in latestPhotoAnalysis ? (
+                      <Text style={styles.cardTime}>{formatTimeAgo(latestPhotoAnalysis.takenAt)}</Text>
+                    ) : (
+                      <Text style={styles.cardTime}>{formatTimeAgo((latestPhotoAnalysis as CameraAnalysisResult).timestamp)}</Text>
+                    )}
                   </View>
                   <Text style={styles.lastAnalysisNotes}>
-                    {latestPhotoAnalysis.jsonResult.nextStep}
+                    {'jsonResult' in latestPhotoAnalysis ? 
+                      latestPhotoAnalysis.jsonResult.nextStep :
+                      (latestPhotoAnalysis as CameraAnalysisResult).recommendations[0] || `Health: ${(latestPhotoAnalysis as CameraAnalysisResult).healthScore}/10`
+                    }
                   </Text>
                   <View style={styles.lastAnalysisFooter}>
                     <View style={styles.ratingContainer}>
                       <Icon name="star" size={12} color={colors.primary} />
-                      <Text style={styles.ratingText}>{latestPhotoAnalysis.jsonResult.rating}/5</Text>
+                      {'jsonResult' in latestPhotoAnalysis ? (
+                        <Text style={styles.ratingText}>{latestPhotoAnalysis.jsonResult.rating}/5</Text>
+                      ) : (
+                        <Text style={styles.ratingText}>{(latestPhotoAnalysis as CameraAnalysisResult).healthScore}/10</Text>
+                      )}
                     </View>
-                    <Text style={styles.stageText}>{latestPhotoAnalysis.jsonResult.activityStage}</Text>
+                    {'jsonResult' in latestPhotoAnalysis ? (
+                      <Text style={styles.stageText}>{latestPhotoAnalysis.jsonResult.activityStage}</Text>
+                    ) : (
+                      <Text style={styles.stageText}>{(latestPhotoAnalysis as CameraAnalysisResult).fermentationStage}</Text>
+                    )}
                   </View>
                 </View>
               </View>

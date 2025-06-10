@@ -58,6 +58,17 @@ export interface CameraAnalysisResult {
     roomTemp: number;
     goal: string;
   };
+  aiAnalysis?: {
+    rise_height: string;
+    bubble_density: string;
+    surface_texture: string;
+    color_notes: string;
+    activity_stage: string;
+    health_rating: string;
+    recommended_next_step: string;
+    confidence_pct: string;
+    rationale: string;
+  };
 }
 
 export interface ChatMessage {
@@ -74,7 +85,7 @@ export type RootStackParamList = {
   AddStarter: undefined;
   EditStarter: { starterId: string };
   CameraCapture: { starterId: string };
-  PhotoAnalysisDetail: { starterId: string; analysisId: string };
+  PhotoAnalysisDetail: { starterId?: string; analysisId?: string; analysisResult?: CameraAnalysisResult };
   Chat: { starterId: string; analysisId?: string };
 };
 

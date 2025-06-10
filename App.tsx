@@ -30,6 +30,7 @@ import { SettingsScreen } from './src/screens/SettingsScreen';
 import { colors } from './src/theme/colors';
 import { paperTheme } from './src/theme/paperTheme';
 import { BottomTabParamList, RootStackParamList } from './src/types';
+import { useStarterStore } from './src/store/starterStore';
 
 const Tab = createBottomTabNavigator<BottomTabParamList>();
 const Stack = createStackNavigator<RootStackParamList>();
@@ -100,6 +101,8 @@ function BottomTabs() {
 
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
+  const initializeWithSampleData = useStarterStore((state) => state.initializeWithSampleData);
+  const fixDateObjects = useStarterStore((state) => state.fixDateObjects);
   
   let [fontsLoaded] = useFonts({
     Montserrat_400Regular,
@@ -112,6 +115,13 @@ export default function App() {
 
   useEffect(() => {
     if (fontsLoaded) {
+      // Fix any Date objects that might be strings after loading from storage
+      setTimeout(() => {
+        fixDateObjects();
+        // Initialize with sample data if needed
+        initializeWithSampleData();
+      }, 100);
+      
       // Show splash for 2 seconds after fonts are loaded
       const timer = setTimeout(() => {
         setShowSplash(false);
@@ -119,7 +129,7 @@ export default function App() {
       
       return () => clearTimeout(timer);
     }
-  }, [fontsLoaded]);
+  }, [fontsLoaded, initializeWithSampleData, fixDateObjects]);
 
   if (!fontsLoaded || showSplash) {
     return <SplashScreen />;

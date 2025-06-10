@@ -23,6 +23,7 @@ import { useStarterStore } from '../store/starterStore';
 import { colors } from '../theme/colors';
 import type { StackScreenProps } from '@react-navigation/stack';
 import type { RootStackParamList, ChatMessage, PhotoAnalysis, CameraAnalysisResult } from '../types';
+import { aiService } from '../services/aiService';
 
 const { width } = Dimensions.get('window');
 
@@ -101,14 +102,34 @@ export const ChatScreen: React.FC<Props> = ({ navigation, route }) => {
     addChatMessage(userMessage);
     const newMessages = [...messages, userMessage as ChatMessage];
     setMessages(newMessages);
+    const messageToSend = inputText.trim();
     setInputText('');
 
     // Show typing indicator
     setIsTyping(true);
 
-    // Simulate AI response (replace with actual OpenAI integration)
-    setTimeout(() => {
-      const aiResponse = generateAIResponse(inputText.trim());
+    try {
+      // Prepare context from analysis for AI
+      let context = '';
+      if (analysis) {
+        const isPhotoAnalysis = 'jsonResult' in analysis;
+        if (isPhotoAnalysis) {
+          const photoAnalysis = analysis as PhotoAnalysis;
+          context = `Recent analysis: Health status: ${photoAnalysis.jsonResult.healthStatus}, Rise: ${photoAnalysis.jsonResult.riseHeight}%, Bubbles: ${photoAnalysis.jsonResult.bubbleDensity}%, Stage: ${photoAnalysis.jsonResult.activityStage}, Rating: ${photoAnalysis.jsonResult.rating}/5`;
+        } else {
+          const cameraAnalysis = analysis as CameraAnalysisResult;
+          context = `Recent analysis: Health score: ${cameraAnalysis.healthScore}/10, Rise activity: ${cameraAnalysis.riseActivity}, Bubble formation: ${cameraAnalysis.bubbleFormation}, Stage: ${cameraAnalysis.fermentationStage}`;
+          
+          // Include detailed AI analysis if available
+          if (cameraAnalysis.aiAnalysis) {
+            context += `, AI detailed analysis: ${JSON.stringify(cameraAnalysis.aiAnalysis)}`;
+          }
+        }
+      }
+
+      // Call AI service for real response
+      const aiResponse = await aiService.sendChatMessage(messageToSend, context);
+      
       const aiMessage: Omit<ChatMessage, 'id'> = {
         analysisId: analysisId || '',
         role: 'assistant',
@@ -118,8 +139,23 @@ export const ChatScreen: React.FC<Props> = ({ navigation, route }) => {
 
       addChatMessage(aiMessage);
       setMessages(prev => [...prev, aiMessage as ChatMessage]);
+    } catch (error) {
+      console.error('Error sending chat message:', error);
+      
+      // Fallback to mock response if AI fails
+      const fallbackResponse = generateAIResponse(messageToSend);
+      const aiMessage: Omit<ChatMessage, 'id'> = {
+        analysisId: analysisId || '',
+        role: 'assistant',
+        content: `I'm having trouble connecting to my AI service right now. Here's some general guidance: ${fallbackResponse}`,
+        timestamp: new Date(),
+      };
+
+      addChatMessage(aiMessage);
+      setMessages(prev => [...prev, aiMessage as ChatMessage]);
+    } finally {
       setIsTyping(false);
-    }, 2000);
+    }
 
     // Scroll to bottom
     setTimeout(() => {
