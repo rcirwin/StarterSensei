@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "StarterSenseiNew",
-    "slug": "StarterSenseiNew",
+    "name": "Starter Sensei",
+    "slug": "starter-sensei",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.rirwin.StarterSenseiNew",
+      "bundleIdentifier": "com.rirwin.StarterSensei",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -25,15 +25,16 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.rirwin.StarterSenseiNew"
+      "package": "com.rirwin.StarterSensei"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "extra": {
       "eas": {
-        "projectId": "1bee5b07-8e24-4eea-a711-af42090057af"
+        "projectId": "e633dcc5-0758-4198-bf1c-74a032079d7c"
       }
-    }
+    },
+    "owner": "rirwin"
   }
 }
